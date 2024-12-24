@@ -1,0 +1,238 @@
+import os
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import GlobalAveragePooling2D, Dense, Dropout
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.applications import ResNet50
+import collections
+
+# First aid instructions dictionary
+first_aid_instructions = {
+    "FU-ringworm": [
+        "Clean the Area",
+        "Apply Antifungal Cream such as clotrimazole or terbinafine",
+        "Keep It Dry",
+        "Avoid Scratching",
+        "Maintain Hygiene"
+    ],
+    "BA- cellulitis": [
+        "Clean the Area",
+        "Apply an Antibiotic Ointment: Use an over-the-counter antibiotic ointment if recommended by a healthcare professional.",
+        "Elevate the Affected Limb",
+        "Keep the Area Covered",
+        "Seek Medical Attention"
+    ],
+    "BA-impetigo": [
+        "Clean the sores with mild soap and water.",
+        "Apply an over-the-counter antibiotic ointment.",
+        "Cover the sores with a sterile bandage.",
+        "Avoid touching or scratching the sores.",
+        "Wash hands frequently and avoid sharing personal items."
+    ],
+    "FU-athlete foot": [
+        "Keep feet clean and dry.",
+        "Apply antifungal cream or powder.",
+        "Wear clean socks made of breathable materials.",
+        "Avoid walking barefoot in public areas.",
+        "Change shoes regularly to allow them to dry completely."
+    ],
+    "FU-nail-fungus": [
+        "Trim and clean nails regularly.",
+        "Apply antifungal nail polish or cream.",
+        "Keep feet dry and avoid moisture.",
+        "Wear breathable socks and shoes.",
+        "Avoid sharing nail clippers or socks."
+    ],
+    "PA-cutaneous-larva-migrans": [
+        "Clean the affected area with soap and water.",
+        "Apply a topical anti-parasitic cream.",
+        "Avoid scratching the affected area.",
+        "Cover the area with a sterile bandage.",
+        "Seek medical attention for appropriate treatment."
+    ],
+    "VI-chickenpox": [
+        "Keep the skin clean and dry.",
+        "Apply calamine lotion to soothe itching.",
+        "Trim fingernails to prevent scratching.",
+        "Use acetaminophen for fever relief.",
+        "Avoid close contact with others to prevent spreading."
+    ],
+    "VI-shingles": [
+        "Keep the rash clean and dry.",
+        "Apply cool compresses to the affected area.",
+        "Use over-the-counter pain relief medications.",
+        "Avoid scratching or picking at the blisters.",
+        "Wear loose, comfortable clothing."
+    ],
+    "FU-athlete-foot":[
+        "Wash and dry your feet.",
+        "Use an antifungal product.",
+        "Keep your feet dry.",
+        "Use tea tree oil."
+    ]
+}
+
+# Training and model setup
+class SkinDiseaseModel:
+    def __init__(self):
+        self.model = None
+        self.class_indices = None
+        self.training_completed = False
+
+    def delete_saved_model(self):
+        try:
+            if os.path.exists('resnet50_skin_disease_model.keras'):
+                os.remove('resnet50_skin_disease_model.keras')
+                print("Saved model deleted.")
+            else:
+                print("No saved model found to delete.")
+        except Exception as e:
+            print(f"Error deleting saved model: {str(e)}")
+
+    def train_model(self):
+        try:
+            # Delete the saved model if it exists
+            self.delete_saved_model()
+
+            # Define directories for your dataset
+            train_dir = r'C:\Users\dhanyashree\Downloads\archive\skin-disease-datasaet\train_set'
+            validation_dir = r'C:\Users\dhanyashree\Downloads\archive\skin-disease-datasaet\test_set'
+
+            # Data Augmentation and Loading
+            train_datagen = ImageDataGenerator(
+                rescale=1.0/255,
+                shear_range=0.2,
+                zoom_range=0.2,
+                rotation_range=40,
+                width_shift_range=0.2,
+                height_shift_range=0.2,
+                horizontal_flip=True,
+                fill_mode='nearest'
+            )
+
+            test_datagen = ImageDataGenerator(rescale=1.0/255)
+
+            train_generator = train_datagen.flow_from_directory(
+                train_dir,
+                target_size=(224, 224),
+                batch_size=32,
+                class_mode='categorical'
+            )
+
+            validation_generator = test_datagen.flow_from_directory(
+                validation_dir,
+                target_size=(224, 224),
+                batch_size=32,
+                class_mode='categorical'
+            )
+
+            # Save class indices
+            self.class_indices = train_generator.class_indices
+            np.save('class_indices.npy', self.class_indices)
+
+            # Print class distribution
+            class_counts = collections.Counter(train_generator.classes)
+            print("Class Distribution in Training Data:")
+            print(class_counts)
+
+            # Create a new ResNet50 model pre-trained on ImageNet
+            print("Creating new model...")
+            base_model = ResNet50(weights='imagenet', include_top=False, input_shape=(224, 224, 3))
+
+            for layer in base_model.layers[-30:]:
+                layer.trainable = True
+
+            x = GlobalAveragePooling2D()(base_model.output)
+            x = Dense(512, activation='relu')(x)
+            x = Dropout(0.5)(x)
+            predictions = Dense(len(first_aid_instructions), activation='softmax')(x)
+
+            self.model = Model(inputs=base_model.input, outputs=predictions)
+
+            self.model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
+                               loss='categorical_crossentropy', metrics=['accuracy'])
+
+            # Train the model
+            self.model.fit(
+                train_generator,
+                epochs=50,  # Set epochs to 50
+                validation_data=validation_generator,
+                callbacks=[tf.keras.callbacks.ModelCheckpoint('resnet50_skin_disease_model.keras', save_best_only=True)]
+            )
+
+            # Save the model
+            self.model.save('resnet50_skin_disease_model.keras')
+
+            # Set training completed flag
+            self.training_completed = True
+            print("Training completed and model saved.")
+
+        except FileNotFoundError as fnf_error:
+            print(f"FileNotFoundError: {str(fnf_error)}")
+            # Handle file not found error during model loading or training
+            # Optionally, display an error message in the UI
+
+        except Exception as e:
+            print(f"Error: {str(e)}")
+            # Display an error message or handle it gracefully in the UI if model loading or training fails
+
+    def load_model(self):
+        try:
+            if os.path.exists('resnet50_skin_disease_model.keras') and os.path.exists('class_indices.npy'):
+                self.model = tf.keras.models.load_model('resnet50_skin_disease_model.keras')
+                self.class_indices = np.load('class_indices.npy', allow_pickle=True).item()
+                self.training_completed = True
+                print("Model and class indices loaded successfully.")
+            else:
+                print("No saved model found. Starting training process.")
+                self.train_model()
+        except Exception as e:
+            print(f"Error loading model: {str(e)}")
+            self.train_model()
+
+    def predict_image(self, image_path):
+        try:
+            # Load and preprocess the image
+            image = tf.keras.preprocessing.image.load_img(image_path, target_size=(224, 224))
+            image_array = tf.keras.preprocessing.image.img_to_array(image)
+            image_array = np.expand_dims(image_array, axis=0)
+            image_array = image_array / 255.0  # Normalize
+
+            # Predict using the loaded model
+            predictions = self.model.predict(image_array)
+
+            # Map the predictions to class names
+            class_indices = {v: k for k, v in self.class_indices.items()}
+            predicted_class_index = np.argmax(predictions)
+            predicted_class = class_indices[predicted_class_index]
+
+            print(f"Predicted class: {predicted_class}")
+
+            # Update the first aid instructions
+            instructions = first_aid_instructions.get(predicted_class, [])
+            if instructions:
+                print(f"First Aid Instructions for {predicted_class}:")
+                for instruction in instructions:
+                    print(f"• {instruction}")
+            else:
+                print(f"No instructions available for {predicted_class}")
+
+        except FileNotFoundError:
+            print(f"Error predicting image: File not found - {image_path}")
+
+        except Exception as e:
+            print(f"Error predicting image: {str(e)}")
+
+
+# Example usage:
+if __name__ == '__main__':
+    # Create the model object
+    skin_disease_model = SkinDiseaseModel()
+    
+    # Load the model if it exists or train it if not
+    skin_disease_model.load_model()
+    
+    # Predict a new image
+    image_path = r'C:\skin\ringworm.jpg'  # Change to your image path
+    skin_disease_model.predict_image(image_path)
